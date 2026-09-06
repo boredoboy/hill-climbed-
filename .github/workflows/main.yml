@@ -1,0 +1,57 @@
+name: Record Game in Cloud
+
+on:
+  workflow_dispatch: # Запускается вручную кнопкой «Run workflow»
+
+jobs:
+  record_doom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install dependencies and Doom
+        run: |
+          sudo apt-get update
+          # Ставим виртуальный дисплей, рекордер ffmpeg, движок doom и свободные ресурсы игры freedoom
+          sudo apt-get install -y xvfb ffmpeg chocolate-doom freedoom jq curl
+
+      - name: Run Doom and Record Screen
+        run: |
+          # 1. Запускаем виртуальный монитор 1280x720 в памяти
+          Xvfb :99 -screen 0 1280x720x24 &
+          export DISPLAY=:99
+          sleep 2
+
+          # 2. Запускаем запись экрана через FFmpeg на 20 секунд в фоне
+          ffmpeg -y -video_size 1280x720 -framerate 30 -f x11grab -i :99.0 \
+            -t 20 -c:v libx264 -pix_fmt yuv420p doom_record.mp4 &
+          FFMPEG_PID=$!
+
+          # 3. Запускаем игру (Freedoom сам крутит геймплейные демки на титульнике)
+          chocolate-doom -iwad /usr/share/games/doom/freedoom2.wad -geometry 1280x720 -nosound &
+          DOOM_PID=$!
+
+          # 4. Ждем, пока FFmpeg закончит запись 20 секунд
+          wait $FFMPEG_PID || true
+
+          # Глушим игру
+          kill $DOOM_PID || true
+
+      - name: Upload to temporary file sharing (tmpfiles.org)
+        run: |
+          echo "### 🎮 Результат записи игры:" >> $GITHUB_STEP_SUMMARY
+          
+          # Отправляем видео на временный анонимный файлообменник
+          RESPONSE=$(curl -s -F "file=@doom_record.mp4" https://tmpfiles.org/api/v1/upload)
+          
+          # Достаем ссылку на страницу скачивания
+          FILE_URL=$(echo "$RESPONSE" | jq -r '.data.url')
+          
+          echo "Ссылка на видео: $FILE_URL"
+          echo "[Скачать / посмотреть видео с геймплеем]($FILE_URL)" >> $GITHUB_STEP_SUMMARY
+
+      # На всякий случай сохраняем копию прямо в артефакты самого GitHub
+      - name: Upload to GitHub Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom_gameplay_video
+          path: doom_record.mp4
